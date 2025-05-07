@@ -1,5 +1,9 @@
 import logging
 import sys
+import os
+from typing import Optional
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from .context import request_id_ctx_var
 
 class CustomFormatter(logging.Formatter):
@@ -28,16 +32,65 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
-def setup_logger(name: str, level=logging.INFO):
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s"
+def setup_logger(
+    name: str,
+    level: int = logging.INFO,
+    log_dir: Optional[str | Path] = None,
+    log_to_console: bool = True,
+    max_bytes: int = 10 * 1024 * 1024,  # 10 MB
+    backup_count: int = 5,  # Хранить 5 файлов
+    log_format: Optional[str] = None
+) -> logging.Logger:
+    """
+    Настройка логгера с поддержкой ротации файлов
+
+    Args:
+        name: Имя логгера
+        level: Уровень логирования
+        log_dir: Директория для файлов логов
+        log_to_console: Выводить ли логи в консоль
+        max_bytes: Максимальный размер файла до ротации (по умолчанию 10MB)
+        backup_count: Количество файлов для хранения (по умолчанию 5)
+        log_format: Формат сообщений лога (если None, используется формат по умолчанию)
+
+    Returns:
+        logging.Logger: Настроенный логгер
+    """
+    log_format = log_format or "%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s"
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    logger.handlers = []  # Очищаем существующие хендлеры
 
-    # Очищаем существующие хендлеры
-    logger.handlers = []
+    if log_to_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(CustomFormatter(log_format))
+        logger.addHandler(console_handler)
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(CustomFormatter(log_format))
-    logger.addHandler(handler)
+    if log_dir:
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Основной лог файл
+        main_log = log_dir / f"{name}.log"
+        file_handler = RotatingFileHandler(
+            filename=main_log,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding='utf-8'
+        )
+        file_handler.setFormatter(logging.Formatter(log_format))
+        logger.addHandler(file_handler)
+
+        # Отдельный файл для ошибок
+        error_log = log_dir / f"{name}.error.log"
+        error_handler = RotatingFileHandler(
+            filename=error_log,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding='utf-8'
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(logging.Formatter(log_format))
+        logger.addHandler(error_handler)
 
     return logger
