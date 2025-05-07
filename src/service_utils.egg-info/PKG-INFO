@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: service_utils
+Version: 0.1.0
+Requires-Dist: fastapi
+Requires-Dist: starlette
+Dynamic: requires-dist
