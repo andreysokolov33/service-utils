@@ -1,10 +1,64 @@
 import logging
 import sys
 import os
-from typing import Optional
+import re
+from typing import Optional, Set, Pattern, Dict, Any
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from .context import request_id_ctx_var
+
+class SensitiveDataFilter(logging.Filter):
+    """Фильтр для маскирования чувствительных данных в логах"""
+
+    # Паттерны для поиска чувствительных данных
+    PATTERNS: Dict[str, Pattern] = {
+        'email': re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
+        'phone': re.compile(r'(\+7|8)[- _]*\d{3}[- _]*\d{3}[- _]*\d{2}[- _]*\d{2}'),
+        'password': re.compile(r'password["\']?\s*[:=]\s*["\']?[^"\'\s]+["\']?', re.IGNORECASE),
+        'token': re.compile(r'token["\']?\s*[:=]\s*["\']?[^"\'\s]+["\']?', re.IGNORECASE),
+        'secret': re.compile(r'secret["\']?\s*[:=]\s*["\']?[^"\'\s]+["\']?', re.IGNORECASE),
+    }
+
+    # Ключи, которые нужно маскировать в словарях
+    SENSITIVE_KEYS: Set[str] = {
+        'password', 'token', 'secret', 'api_key', 'access_token',
+        'refresh_token', 'private_key', 'email', 'phone'
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.replacement = '***'
+
+    def _mask_sensitive_data(self, text: str) -> str:
+        """Маскирует чувствительные данные в тексте"""
+        for pattern in self.PATTERNS.values():
+            text = pattern.sub(self.replacement, text)
+        return text
+
+    def _mask_dict_values(self, obj: Any) -> Any:
+        """Рекурсивно маскирует чувствительные данные в словарях"""
+        if isinstance(obj, dict):
+            return {
+                k: self.replacement if k.lower() in self.SENSITIVE_KEYS else self._mask_dict_values(v)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, list):
+            return [self._mask_dict_values(item) for item in obj]
+        return obj
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, (dict, list)):
+            record.msg = self._mask_dict_values(record.msg)
+        elif isinstance(record.msg, str):
+            record.msg = self._mask_sensitive_data(record.msg)
+
+        if record.args:
+            record.args = tuple(
+                self._mask_dict_values(arg) if isinstance(arg, (dict, list)) else
+                self._mask_sensitive_data(str(arg)) if isinstance(arg, str) else arg
+                for arg in record.args
+            )
+        return True
 
 class CustomFormatter(logging.Formatter):
     grey = "\x1b[38;21m"
@@ -42,7 +96,7 @@ def setup_logger(
     log_format: Optional[str] = None
 ) -> logging.Logger:
     """
-    Настройка логгера с поддержкой ротации файлов
+    Настройка логгера с поддержкой ротации файлов и фильтрацией чувствительных данных
 
     Args:
         name: Имя логгера
@@ -56,10 +110,18 @@ def setup_logger(
     Returns:
         logging.Logger: Настроенный логгер
     """
-    log_format = log_format or "%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s"
+    log_format = log_format or (
+        "%(asctime)s - %(levelname)s - [%(request_id)s] - "
+        "%(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+    )
+
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.handlers = []  # Очищаем существующие хендлеры
+
+    # Добавляем фильтр чувствительных данных
+    sensitive_filter = SensitiveDataFilter()
+    logger.addFilter(sensitive_filter)
 
     if log_to_console:
         console_handler = logging.StreamHandler(sys.stdout)
